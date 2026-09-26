@@ -76,6 +76,8 @@ button:focus-visible,select:focus-visible,input:focus-visible,.card:focus-visibl
 .actions .btn{padding:12px 10px;font-size:1rem}
 .miss{background:var(--warn-bg);color:var(--warn);border-color:transparent}
 .hit{background:var(--good-bg);color:var(--good);border-color:transparent}
+.nav{display:flex;justify-content:space-between;align-items:center;gap:10px;color:var(--muted);font-size:.85rem;font-variant-numeric:tabular-nums}
+.nav .btn:disabled{opacity:.4;cursor:default}
 .kbd{font-size:.72rem;color:var(--muted);text-align:center}
 .empty{background:var(--surface);border:1px dashed var(--line);border-radius:12px;padding:40px 20px;text-align:center;color:var(--muted)}
 /* save panel */
@@ -163,7 +165,8 @@ textarea{width:100%;min-height:90px;font:12px ui-monospace,monospace;background:
       <button class="btn" id="b-flag" title="Toggle the practice flag without scoring">⚑</button>
       <button class="btn hit" id="b-hit">Got it</button>
     </div>
-    <div class="kbd">Keys: Space flip · ← or 1 need practice · → or 2 got it · F toggle flag</div>
+    <div class="nav"><button class="btn" id="b-back">‹ Back</button><span id="d-pos2"></span><button class="btn" id="b-next">Next ›</button></div>
+    <div class="kbd">Keys: Space flip · ← or 1 need practice · → or 2 got it · B back · N next · F toggle flag</div>
   </section>
 
   <section id="view-list" hidden>
@@ -204,12 +207,17 @@ function P(i){return progress[i]||(progress[i]={r:0,w:0,s:0,f:0,t:0});}
 function isKnown(p){return p && !p.f && p.s>=KNOWN_STREAK;}
 
 function persist(){try{localStorage.setItem(LS_KEY,JSON.stringify(exportObj()));}catch(e){}}
-function restore(){try{const raw=localStorage.getItem(LS_KEY);if(raw)applyImport(JSON.parse(raw),true);}catch(e){}}
+function restore(){try{const raw=localStorage.getItem(LS_KEY);if(raw){const o=JSON.parse(raw);applyImport(o,true);return restoreSession(o);}}catch(e){}return false;}
+// put the viewer back on the card they were on when the progress was saved
+function restoreSession(o){
+  const ss=o&&o.session;if(!ss||!Array.isArray(ss.queue))return false;
+  const q=ss.queue.map(Number).filter(i=>Number.isInteger(i)&&WORDS[i]);if(!q.length)return false;
+  queue=q;roundTotal=q.length;qi=Math.max(0,Math.min(+ss.qi||0,q.length));render();return true;}
 
 function exportObj(){
   const prog={};
   for(const k in progress){const p=progress[k];if(p.r||p.w||p.f)prog[k]={en:WORDS[k][0],r:p.r,w:p.w,s:p.s,f:p.f,t:p.t};}
-  return {app:'band2-flashcards',version:1,savedAt:new Date().toISOString(),settings,progress:prog};
+  return {app:'band2-flashcards',version:1,savedAt:new Date().toISOString(),settings,session:{queue,qi},progress:prog};
 }
 function applyImport(obj,silent){
   if(!obj||obj.app!=='band2-flashcards'||typeof obj.progress!=='object') throw new Error('This file is not a Band II Flashcards save.');
@@ -255,6 +263,7 @@ function render(){
   $('d-pos').textContent=roundTotal?`${Math.min(qi+1,queue.length)} / ${queue.length}`:'0 / 0';
   $('d-bar').style.width=queue.length?(qi/queue.length*100)+'%':'0';
   $('d-left').textContent=done?'':`${queue.length-qi} left`;
+  $('d-pos2').textContent=$('d-pos').textContent;$('b-back').disabled=qi<=0;$('b-next').disabled=qi>=queue.length;
   if(!queue.length||done){
     $('cardzone').hidden=true;$('actions').style.visibility='hidden';$('emptymsg').hidden=false;
     $('emptymsg').innerHTML=!roundTotal?(settings.deck==='flag'?'No words are flagged for practice in this list yet.':'No cards match these filters.')
@@ -324,15 +333,19 @@ $('tab-practice').onclick=()=>setTab('practice');$('tab-list').onclick=()=>setTa
 /* events */
 $('card').addEventListener('click',flip);
 $('b-hit').onclick=()=>answer(true);$('b-miss').onclick=()=>answer(false);$('b-flag').onclick=toggleFlag;
-$('b-new').onclick=buildQueue;
+$('b-new').onclick=()=>{buildQueue();persist();};
+function go(d){if(!queue.length)return;qi=Math.max(0,Math.min(queue.length,qi+d));persist();render();}
+$('b-back').onclick=()=>go(-1);$('b-next').onclick=()=>go(1);
 ['f-core','f-rp','f-deck','f-dir','f-letter','f-order'].forEach(id=>$(id).addEventListener('change',()=>{
   settings.core=$('f-core').value;settings.rp=$('f-rp').value;settings.deck=$('f-deck').value;settings.dir=$('f-dir').value;settings.letter=$('f-letter').value;settings.order=$('f-order').value;persist();
-  if(id==='f-dir'){render();}else buildQueue();}));
+  if(id==='f-dir'){render();}else{buildQueue();persist();}}));
 document.addEventListener('keydown',e=>{
   if($('view-practice').hidden||e.target.matches('input,select,textarea'))return;
   if(e.key===' '||e.key==='Enter'){if(e.target.tagName==='BUTTON'&&e.target.id!=='card')return;e.preventDefault();flip();}
   else if(e.key==='ArrowLeft'||e.key==='1')answer(false);
   else if(e.key==='ArrowRight'||e.key==='2')answer(true);
+  else if(e.key==='b'||e.key==='B')go(-1);
+  else if(e.key==='n'||e.key==='N')go(1);
   else if(e.key==='f'||e.key==='F')toggleFlag();
 });
 
@@ -363,13 +376,13 @@ $('b-copy').onclick=async()=>{
 $('b-load').onclick=()=>$('file').click();
 $('file').addEventListener('change',async e=>{
   const f=e.target.files[0];if(!f)return;
-  try{const n=applyImport(JSON.parse(await f.text()));persist();buildQueue();if(!$('view-list').hidden)renderList();toast(`Loaded progress for ${n} words`);}
+  try{const o=JSON.parse(await f.text());const n=applyImport(o);if(!restoreSession(o))buildQueue();persist();if(!$('view-list').hidden)renderList();toast(`Loaded progress for ${n} words`);}
   catch(err){toast(err.message.startsWith('This file')?err.message:'Could not read that file. Choose a .json file saved from this page.');}
   e.target.value='';
 });
 document.addEventListener('paste',e=>{
   if(e.target.matches('input,textarea'))return;const t=e.clipboardData&&e.clipboardData.getData('text');if(!t||t.indexOf('band2-flashcards')<0)return;
-  try{const n=applyImport(JSON.parse(t));persist();buildQueue();toast(`Loaded progress for ${n} words from paste`);}catch(err){}
+  try{const o=JSON.parse(t);const n=applyImport(o);if(!restoreSession(o))buildQueue();persist();toast(`Loaded progress for ${n} words from paste`);}catch(err){}
 });
 $('b-reset').onclick=()=>{$('resetconfirm').hidden=false;};
 $('b-reset-no').onclick=()=>{$('resetconfirm').hidden=true;};
@@ -377,7 +390,7 @@ $('b-reset-yes').onclick=()=>{progress={};persist();$('resetconfirm').hidden=tru
 
 {const counts={};for(let i=0;i<WORDS.length;i++){const l=firstLetter(i);if(l)counts[l]=(counts[l]||0)+1;}
  const sel=$('f-letter');Object.keys(counts).sort().forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=`${l} (${counts[l]})`;sel.appendChild(o);});}
-restore();syncControls();buildQueue();
+if(!restore()){syncControls();buildQueue();}
 </script>
 
 </body></html>
